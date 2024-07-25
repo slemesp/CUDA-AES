@@ -1,4 +1,7 @@
-import sys, os
+import os
+import sys
+from pycuda import autoinit
+
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import numpy as np
 import tb.AES_test as AES
@@ -43,12 +46,22 @@ if __name__ == '__main__':
         times_private_it = []
 
         for iteration in tqdm(range(nr_iterations)):
-            time_gpu_naive = graphicscomputer.AES_gpu(byte_array_in, byte_array_key, byte_array_in.size, "naive", block_size=block_size)[1]
-            time_gpu_shared = graphicscomputer.AES_gpu(byte_array_in, byte_array_key, byte_array_in.size, "shared", block_size=block_size)[1]
-            time_gpu_shared_coalesced = graphicscomputer.AES_gpu(byte_array_in, byte_array_key, byte_array_in.size, "shared_coalesced", block_size=block_size)[1]
-            time_gpu_shared_coalesced_noconst = graphicscomputer.AES_gpu(byte_array_in, byte_array_key, byte_array_in.size, "shared_coalesced_noconst", block_size=block_size)[1]
-            time_private = graphicscomputer.AES_gpu(byte_array_in, byte_array_key, byte_array_in.size, "private", block_size=block_size)[1]
-            time_private_sharedlut = graphicscomputer.AES_gpu(byte_array_in, byte_array_key, byte_array_in.size, "private_sharedlut", block_size=block_size)[1]
+            time_gpu_naive = \
+            graphicscomputer.AES_gpu(byte_array_in, byte_array_key, byte_array_in.size, "naive", block_size=block_size)[
+                1]
+            time_gpu_shared = graphicscomputer.AES_gpu(byte_array_in, byte_array_key, byte_array_in.size, "shared",
+                                                       block_size=block_size)[1]
+            time_gpu_shared_coalesced = \
+            graphicscomputer.AES_gpu(byte_array_in, byte_array_key, byte_array_in.size, "shared_coalesced",
+                                     block_size=block_size)[1]
+            time_gpu_shared_coalesced_noconst = \
+            graphicscomputer.AES_gpu(byte_array_in, byte_array_key, byte_array_in.size, "shared_coalesced_noconst",
+                                     block_size=block_size)[1]
+            time_private = graphicscomputer.AES_gpu(byte_array_in, byte_array_key, byte_array_in.size, "private",
+                                                    block_size=block_size)[1]
+            time_private_sharedlut = \
+            graphicscomputer.AES_gpu(byte_array_in, byte_array_key, byte_array_in.size, "private_sharedlut",
+                                     block_size=block_size)[1]
             time_cpu = aes_cpu.encrypt(hex_in, hex_key)[1]
 
             times_gpu_naive_it.append(time_gpu_naive)
@@ -58,14 +71,15 @@ if __name__ == '__main__':
             times_private_it.append(time_private)
             times_private_sharedlut_it.append(time_private_sharedlut)
             times_cpu_it.append(time_cpu)
-        
-        times_gpu_naive.append(sum(times_gpu_naive_it)/len(times_gpu_naive_it))
-        times_gpu_shared.append(sum(times_gpu_shared_it)/len(times_gpu_shared_it))
-        times_gpu_shared_coalesced.append(sum(times_gpu_shared_coalesced_it)/len(times_gpu_shared_coalesced_it))
-        times_gpu_shared_coalesced_noconst.append(sum(times_gpu_shared_coalesced_noconst_it)/len(times_gpu_shared_coalesced_noconst_it))
-        times_private.append(sum(times_private_it)/len(times_private_it))
-        times_private_sharedlut.append(sum(times_private_sharedlut_it)/len(times_private_sharedlut_it))
-        times_cpu.append(sum(times_cpu_it)/len(times_cpu_it))
+
+        times_gpu_naive.append(sum(times_gpu_naive_it) / len(times_gpu_naive_it))
+        times_gpu_shared.append(sum(times_gpu_shared_it) / len(times_gpu_shared_it))
+        times_gpu_shared_coalesced.append(sum(times_gpu_shared_coalesced_it) / len(times_gpu_shared_coalesced_it))
+        times_gpu_shared_coalesced_noconst.append(
+            sum(times_gpu_shared_coalesced_noconst_it) / len(times_gpu_shared_coalesced_noconst_it))
+        times_private.append(sum(times_private_it) / len(times_private_it))
+        times_private_sharedlut.append(sum(times_private_sharedlut_it) / len(times_private_sharedlut_it))
+        times_cpu.append(sum(times_cpu_it) / len(times_cpu_it))
 
     print('GPU (naive) execution times:\n', times_gpu_naive)
     print('GPU (shared) execution times:\n', times_gpu_shared)

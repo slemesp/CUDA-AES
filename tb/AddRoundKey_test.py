@@ -1,12 +1,11 @@
 #!/usr/bin/env python
 
-import time
 import numpy as np
 import pycuda.driver as cuda
 from pycuda.compiler import SourceModule
-import pycuda.autoinit
 
 from scipy import stats
+
 
 class AddRoundKeyTest:
     def __init__(self):
@@ -22,7 +21,6 @@ class AddRoundKeyTest:
         """
 
         self.module = SourceModule(enable_test + kernelwrapper)
-
 
     def addroundkey_gpu(self, message, roundkey, length):
         # Event objects to mark the start and end points
@@ -88,7 +86,8 @@ def test1_AddRoundKeyTest():
 
     assert np.array_equal(result_gpu, byte_array_ref)
 
-    return time
+    # return time
+
 
 def test2_AddRoundKeyTest():
     # Input arrays

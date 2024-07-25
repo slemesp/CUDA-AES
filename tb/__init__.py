@@ -1,0 +1,1 @@
+from pycuda import autoinit

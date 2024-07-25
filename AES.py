@@ -11,34 +11,6 @@ from pycuda import autoinit
 from pycuda.compiler import SourceModule
 
 
-def obtener_porcion_fits(image_data, portion_size=50, dtype=np.uint8):
-    # Obtiene las dimensiones de la imagen
-    height, width = image_data.shape[1:]
-
-    # Calcula las coordenadas del centro de la imagen
-    center_x = width // 2
-    center_y = height // 2
-
-    # Calcula las coordenadas de la región de interés
-    start_x = max(0, center_x - portion_size // 2)
-    end_x = min(width, start_x + portion_size)
-    start_y = max(0, center_y - portion_size // 2)
-    end_y = min(height, start_y + portion_size)
-
-    # Ajusta el tamaño si la porción solicitada es mayor que las dimensiones de la imagen
-    if end_x - start_x < portion_size:
-        start_x = max(0, center_x - portion_size // 2)
-        end_x = min(width, start_x + portion_size)
-    if end_y - start_y < portion_size:
-        start_y = max(0, center_y - portion_size // 2)
-        end_y = min(height, start_y + portion_size)
-
-    # Extrae la porción de la imagen
-    portion = image_data[0][start_y:end_y, start_x:end_x]
-
-    return portion.astype(np.uint8)
-
-
 # AES encryption and decryption class
 class AES:
     """
@@ -147,6 +119,8 @@ class AES:
             0x0b, 0x08, 0x0d, 0x0e, 0x07, 0x04, 0x01, 0x02, 0x13, 0x10, 0x15, 0x16, 0x1f, 0x1c, 0x19, 0x1a
         ], dtype=self.dtype)
 
+        self.counter = self.dtype(0)
+
     @staticmethod
     def __read_file(path, mode="r"):
         with open(path, mode) as f:
@@ -180,7 +154,6 @@ class AES:
         sharedLut = """
         #define LUT_IN_SHARED
         """
-
         kernelwrapper = self.__read_file("kernels/general.cuh")
         kernelwrapper += self.__read_file("kernels/InvSubbytes.cuh")
         kernelwrapper += self.__read_file("kernels/InvShiftRows.cuh")
@@ -190,16 +163,24 @@ class AES:
         kernelwrapper += self.__read_file("kernels/InvRound.cuh")
         kernelwrapper += self.__read_file("kernels/KeyExpansion.cuh")
         kernelwrapper += self.__read_file("kernels/InvFinalRound.cuh")
+
+        kernelwrapper += self.__read_file("kernels/SubBytes.cuh")
+        kernelwrapper += self.__read_file("kernels/ShiftRows.cuh")
+        kernelwrapper += self.__read_file("kernels/Round.cuh")
+        kernelwrapper += self.__read_file("kernels/FinalRound.cuh")
+
         kernelwrapper += self.__read_file("kernels/InvAES.cuh")
 
         self.module_decrpyt = SourceModule(sharedLut + kernelwrapper)
 
-    def encrypt_gpu(self, state, cipherkey, statelength, block_size=None):
+    def encrypt_gpu(self, state, cipherkey, block_size=None):
+        state = np.frombuffer(state, dtype=np.uint8)  # Convert bytes to numpy array
+
         # Pad the message so its length is a multiple of 16 bytes
-        if (statelength % 16 != 0):
-            padding = np.zeros(16 - statelength % 16, state.dtype)
-            state = np.append(state, padding)
-            statelength += 16 - statelength % 16
+        padding_len = 16 - (state.size % 16)
+        if padding_len != 16:
+            padding = np.zeros(padding_len, dtype=np.uint8)
+            state = np.concatenate((state, padding))
 
         # Device memory allocation for input and output arrays
         io_state_gpu = cuda.mem_alloc_like(state)
@@ -219,34 +200,39 @@ class AES:
 
         # Calculate block size and grid size
         if block_size is None:
-            block_size = (statelength - 1) // 16 + 1
+            block_size = (state.size - 1) // 16 + 1
             grid_size = 1
             if (block_size > 1024):
                 block_size = 1024
-                grid_size = (statelength - 1) // (1024 * 16) + 1
+                grid_size = (state.size - 1) // (1024 * 16) + 1
         else:
-            grid_size = (statelength - 1) // (block_size * 16) + 1
+            grid_size = (state.size - 1) // (block_size * 16) + 1
 
         blockDim = (block_size, 1, 1)
         gridDim = (grid_size, 1, 1)
 
         # call kernel
         prg = self.module_encrypt.get_function("AES_private_sharedlut")
-        prg(io_state_gpu, i_cipherkey_gpu, np.uint32(statelength), i_rcon_gpu, i_sbox_gpu, i_mul2_gpu, i_mul3_gpu,
+        prg(io_state_gpu, i_cipherkey_gpu, np.uint32(state.size), i_rcon_gpu, i_sbox_gpu, i_mul2_gpu, i_mul3_gpu,
             block=blockDim, grid=gridDim)
 
         # copy results from device to host
         res = np.empty_like(state)
         cuda.memcpy_dtoh(res, io_state_gpu)
 
+        del io_state_gpu, i_cipherkey_gpu, i_rcon_gpu, i_sbox_gpu, i_mul2_gpu, i_mul3_gpu
+
+        # Return the result
         return res
 
-    def decrypt_gpu(self, state, cipherkey, statelength, block_size=None):
+    def decrypt_gpu(self, state, cipherkey, block_size=None):
+        state = np.frombuffer(state, dtype=np.uint8)  # Convert bytes to numpy array
+
         # Pad the message so its length is a multiple of 16 bytes
-        if (statelength % 16 != 0):
-            padding = np.zeros(16 - statelength % 16, state.dtype)
-            state = np.append(state, padding)
-            statelength += 16 - statelength % 16
+        padding_len = 16 - (state.size % 16)
+        if padding_len != 16:
+            padding = np.zeros(padding_len, dtype=np.uint8)
+            state = np.concatenate((state, padding))
 
         # device memory allocation
         io_state_gpu = cuda.mem_alloc_like(state)
@@ -267,64 +253,217 @@ class AES:
 
         # Calculate block size and grid size
         if block_size is None:
-            block_size = (statelength - 1) // 16 + 1
+            block_size = (state.size - 1) // 16 + 1
             grid_size = 1
             if (block_size > 1024):
                 block_size = 1024
-                grid_size = (statelength - 1) // (1024 * 16) + 1
+                grid_size = (state.size - 1) // (1024 * 16) + 1
         else:
-            grid_size = (statelength - 1) // (block_size * 16) + 1
+            grid_size = (state.size - 1) // (block_size * 16) + 1
 
         blockDim = (block_size, 1, 1)
         gridDim = (grid_size, 1, 1)
 
         # call kernel
         prg = self.module_decrpyt.get_function("inv_AES")
-        prg(io_state_gpu, i_cipherkey_gpu, np.uint32(statelength), i_rcon_gpu, i_sbox_gpu, i_invsbox_gpu, i_mul2_gpu,
-            i_mul3_gpu, block=blockDim, grid=gridDim)
+        prg(io_state_gpu, i_cipherkey_gpu, np.uint32(state.size), i_rcon_gpu, i_sbox_gpu, i_invsbox_gpu,
+            i_mul2_gpu, i_mul3_gpu, block=blockDim, grid=gridDim)
 
         # Copy result from device to the host
         res = np.empty_like(state)
         cuda.memcpy_dtoh(res, io_state_gpu)
 
+        # Remove padding
+        res = res[:-padding_len] if padding_len != 16 else res
+
+        del io_state_gpu, i_cipherkey_gpu, i_rcon_gpu, i_sbox_gpu, i_invsbox_gpu, i_mul2_gpu, i_mul3_gpu
+
+        return res
+
+    def encrypt_ctr_gpu(self, state, cipherkey, block_size=None):
+        state = np.frombuffer(state, dtype=np.uint8)  # Convert bytes to numpy array
+
+        # Pad the message so its length is a multiple of 16 bytes
+        padding_len = 16 - (state.size % 16)
+        if padding_len != 16:
+            padding = np.zeros(padding_len, dtype=np.uint8)
+            state = np.concatenate((state, padding))
+
+        # Device memory allocation for input and output arrays
+        io_state_gpu = cuda.mem_alloc_like(state)
+        i_cipherkey_gpu = cuda.mem_alloc_like(cipherkey)
+        i_rcon_gpu = cuda.mem_alloc_like(self.rcon)
+        i_sbox_gpu = cuda.mem_alloc_like(self.sbox)
+        i_mul2_gpu = cuda.mem_alloc_like(self.mul2)
+        i_mul3_gpu = cuda.mem_alloc_like(self.mul3)
+        i_counter_gpu = cuda.mem_alloc_like(self.counter)
+
+        # Copy data from host to device
+        cuda.memcpy_htod(io_state_gpu, state)
+        cuda.memcpy_htod(i_cipherkey_gpu, cipherkey)
+        cuda.memcpy_htod(i_rcon_gpu, self.rcon)
+        cuda.memcpy_htod(i_sbox_gpu, self.sbox)
+        cuda.memcpy_htod(i_mul2_gpu, self.mul2)
+        cuda.memcpy_htod(i_mul3_gpu, self.mul3)
+        cuda.memcpy_htod(i_counter_gpu, self.counter)
+
+        # Calculate block size and grid size
+        if block_size is None:
+            block_size = (state.size - 1) // 16 + 1
+            grid_size = 1
+            if (block_size > 1024):
+                block_size = 1024
+                grid_size = (state.size - 1) // (1024 * 16) + 1
+        else:
+            grid_size = (state.size - 1) // (block_size * 16) + 1
+
+        blockDim = (block_size, 1, 1)
+        gridDim = (grid_size, 1, 1)
+
+        # call kernel
+        prg = self.module_encrypt.get_function("AES_CTR")
+        prg(io_state_gpu, i_cipherkey_gpu, np.uint32(state.size), i_rcon_gpu, i_sbox_gpu, i_mul2_gpu, i_mul3_gpu,
+            # i_counter_gpu,
+            block=blockDim, grid=gridDim)
+
+        # copy results from device to host
+        res = np.empty_like(state)
+        cuda.memcpy_dtoh(res, io_state_gpu)
+
+        del io_state_gpu, i_cipherkey_gpu, i_rcon_gpu, i_sbox_gpu, i_mul2_gpu, i_mul3_gpu
+
+        # Return the result
         return res
 
 
-if __name__ == "__main__":
-    print(autoinit.device)
-    from astropy.io import fits
+def test_aes_ctr(fits_file):
+    logger.info("Loading FITS file: %s", fits_file)
 
-    fits_file = './Images/TTT2_QHY411-2_2024-05-13-03-02-54-564461_Chariklo.fits'
+    # Medir tiempo de carga de datos
+    start_time = time.time()
+    try:
+        image_data = fits.getdata(fits_file)
+        load_data_time = time.time() - start_time
+        logger.info("Data loaded in %.2f seconds", load_data_time)
+    except Exception as e:
+        logger.error("Error loading FITS file: %s", e)
+        raise
 
-    hdul = fits.open(fits_file)
+    # Medir tiempo de conversión a bytes
+    start_time = time.time()
+    try:
+        image_bytes = image_data.tobytes()
+        tobytes_time = time.time() - start_time
+        logger.info("Conversion to bytes completed in %.2f seconds", tobytes_time)
+    except Exception as e:
+        logger.error("Error converting image data to bytes: %s", e)
+        raise
 
-    header = hdul[1].header
-
-    original_data = hdul[1].data[0].astype(np.int32)
-    hdul.close()
-    M, N = original_data.shape
-    print(M, N)
-    #
-    # input = original_data
-    # byte_array_in = inpute
-    # print(byte_array_in)
-
-    # Get random key
+    # Generar clave aleatoria
     byte_key = os.urandom(128)
     byte_array_key = np.frombuffer(byte_key, dtype=np.byte)
 
-    # get encoder and encode
-    print("Encrypting the input...")
+    # Crear instancia de AES
     computer = AES()
-    out = computer.encrypt_gpu(original_data, byte_array_key, original_data.size)
 
-    out_hex = bytes(out).hex()
-    print("Encryption complete!")
-    # print(out_hex)
+    # Encriptar los datos de la imagen
+    logger.info("Encrypting the input...")
+    start_time = time.time()
+    encrypted_bytes = computer.encrypt_ctr_gpu(image_bytes, byte_array_key)
+    encryption_time = time.time() - start_time
+    logger.info("Encryption complete in %.2f seconds", encryption_time)
 
-    print("Decrypting the encrypted input...")
-    in_decrpyted = computer.decrypt_gpu(out, byte_array_key, out.size)
-    in_decrpyted = in_decrpyted[:M * N].reshape(M, N)
-    print("Decrypting complete!")
-    print(in_decrpyted)
-    print(str(original_data) == str(in_decrpyted))
+    # Convertir los bytes encriptados a un array de numpy
+    encrypted_data = np.frombuffer(encrypted_bytes, dtype=image_data.dtype).reshape(image_data.shape)
+
+    # Desencriptar los datos de la imagen
+    logger.info("Decrypting the input...")
+    start_time = time.time()
+    decrypted_bytes = computer.encrypt_ctr_gpu(encrypted_bytes, byte_array_key)
+    decryption_time = time.time() - start_time
+    logger.info("Decryption complete in %.2f seconds", decryption_time)
+
+    # Convertir los bytes desencriptados a un array de numpy
+    decrypted_data = np.frombuffer(decrypted_bytes, dtype=image_data.dtype).reshape(image_data.shape)
+
+    # Verificar si la imagen original es igual a la desencriptada
+    data_is_equal = np.array_equal(image_data, decrypted_data)
+    logger.info("Image data is equal to decrypted data: %s", data_is_equal)
+
+    # plot_interactive_image(image_data, encrypted_data, decrypted_data)
+
+
+def test_aes(fits_file):
+    logger.info("Loading FITS file: %s", fits_file)
+
+    # Medir tiempo de carga de datos
+    start_time = time.time()
+    try:
+        image_data = fits.getdata(fits_file)
+        load_data_time = time.time() - start_time
+        logger.info("Data loaded in %.2f seconds", load_data_time)
+    except Exception as e:
+        logger.error("Error loading FITS file: %s", e)
+        raise
+
+    # Medir tiempo de conversión a bytes
+    start_time = time.time()
+    try:
+        image_bytes = image_data.tobytes()
+        tobytes_time = time.time() - start_time
+        logger.info("Conversion to bytes completed in %.2f seconds", tobytes_time)
+    except Exception as e:
+        logger.error("Error converting image data to bytes: %s", e)
+        raise
+
+    # Generar clave aleatoria
+    byte_key = os.urandom(128)
+    byte_array_key = np.frombuffer(byte_key, dtype=np.byte)
+
+    # Crear instancia de AES
+    computer = AES()
+
+    # Encriptar los datos de la imagen
+    logger.info("Encrypting the input...")
+    start_time = time.time()
+    encrypted_bytes = computer.encrypt_gpu(image_bytes, byte_array_key)
+    encryption_time = time.time() - start_time
+    logger.info("Encryption complete in %.2f seconds", encryption_time)
+
+    # Convertir los bytes encriptados a un array de numpy
+    encrypted_data = np.frombuffer(encrypted_bytes, dtype=image_data.dtype).reshape(image_data.shape)
+
+    # Desencriptar los datos de la imagen
+    logger.info("Decrypting the input...")
+    start_time = time.time()
+    decrypted_bytes = computer.decrypt_gpu(encrypted_bytes, byte_array_key)
+    decryption_time = time.time() - start_time
+    logger.info("Decryption complete in %.2f seconds", decryption_time)
+
+    # Convertir los bytes desencriptados a un array de numpy
+    decrypted_data = np.frombuffer(decrypted_bytes, dtype=image_data.dtype).reshape(image_data.shape)
+
+    # Verificar si la imagen original es igual a la desencriptada
+    data_is_equal = np.array_equal(image_data, decrypted_data)
+    logger.info("Image data is equal to decrypted data: %s", data_is_equal)
+
+    # plot_interactive_image(image_data, encrypted_data, decrypted_data)
+
+
+if __name__ == "__main__":
+    import logging
+    import time
+    from astropy.io import fits
+
+    # Configuración del logger
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+    logger = logging.getLogger(__name__)
+
+    logger.info("Autoinit device: %s", autoinit.device)
+
+    # Archivo FITS
+    fits_file = './Images/TTT1_iKon936-1_2024-05-12-23-55-18-657530_Ton599.fits'
+    # fits_file = './Images/TTT2_QHY411-2_2024-05-13-03-02-54-564461_Chariklo.fits'
+
+    test_aes(fits_file)
+    test_aes_ctr(fits_file)

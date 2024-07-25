@@ -1,5 +1,7 @@
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 import time
+
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
 
 class AES_Python:
 
@@ -23,7 +25,7 @@ class AES_Python:
         ct = encryptor.update(input) + encryptor.finalize()
         end = time.time()
         return ct.hex(), end - start
-    
+
     # decrypt(self, ciphertext):
     #  Decrypt the ciphertext and return the plaintext.
     #  Inputs:
@@ -40,6 +42,7 @@ class AES_Python:
         end = time.time()
         return plaintext.hex(), end - start
 
+
 def test_AES_Python():
     hex_key = "000102030405060708090a0b0c0d0e0f"
     hex_input = "00112233445566778899aabbccddeeff"
@@ -49,6 +52,7 @@ def test_AES_Python():
     assert ciphertext == "69c4e0d86a7b0430d8cdb78070b4c55a"
     assert plaintext == hex_input
 
+
 def test2_AES_Python():
     hex_key = "000102030405060708090a0b0c0d0e0f"
     hex_input = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
@@ -57,6 +61,7 @@ def test2_AES_Python():
     plaintext = aes.decrypt(ciphertext, hex_key)[0]
     assert ciphertext == "69c4e0d86a7b0430d8cdb78070b4c55a69c4e0d86a7b0430d8cdb78070b4c55a"
     assert plaintext == hex_input
+
 
 def test3_AES_Python():
     hex_key = "000102030405060708090a0b0c0d0e0f"

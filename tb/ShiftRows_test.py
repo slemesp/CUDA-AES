@@ -1,12 +1,11 @@
 #!/usr/bin/env python
 
-import time
 import numpy as np
 import pycuda.driver as cuda
 from pycuda.compiler import SourceModule
-import pycuda.autoinit
 
 from scipy import stats
+
 
 class ShiftRowsTest:
     def __init__(self):
@@ -21,7 +20,6 @@ class ShiftRowsTest:
         """
 
         self.module = SourceModule(enable_test + kernelwrapper)
-
 
     def shiftrows_gpu(self, message, length):
         # Event objects to mark the start and end points
@@ -81,7 +79,8 @@ def test1_ShiftRowsTest():
 
     assert np.array_equal(result_gpu, byte_array_ref)
 
-    return time
+    # return time
+
 
 def test2_ShiftRowsTest():
     # Input array

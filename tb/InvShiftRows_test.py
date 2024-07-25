@@ -1,10 +1,9 @@
 #!/usr/bin/env python
 
-import time
 import numpy as np
 import pycuda.driver as cuda
 from pycuda.compiler import SourceModule
-import pycuda.autoinit
+
 
 class InvShiftRowsTest:
     def __init__(self):
@@ -19,7 +18,6 @@ class InvShiftRowsTest:
         """
 
         self.module = SourceModule(enable_test + kernelwrapper)
-
 
     def invshiftrows_gpu(self, message, length):
         # Event objects to mark the start and end points
@@ -81,6 +79,7 @@ def test1_InvShiftRowsTest():
     print(result_gpu)
 
     assert np.array_equal(result_gpu, byte_array_ref)
+
 
 def test2_InvShiftRowsTest():
     # Input array
