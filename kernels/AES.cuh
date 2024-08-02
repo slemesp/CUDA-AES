@@ -376,7 +376,8 @@ __global__ void AES_private_sharedlut_ctr(char* State, char* CipherKey, const un
         for (int i = 0; i < 16; i++)
             State[index + i] = stateLocal[i];
 }
-__global__ void AES_CTR(char* State, char* CipherKey, const unsigned int StateLength, char* grcon, char* gsbox, char* gmul2, char* gmul3)
+
+__global__ void AES_CTR(char* State, char* CipherKey, const unsigned int StateLength, char* grcon, char* gsbox, char* gmul2, char* gmul3, const unsigned int counterinit)
 {
     int index = (threadIdx.x + blockDim.x * blockIdx.x) * 16; // Cada thread procesa un bloque de 16 bytes
     int blockIndex = blockIdx.x * blockDim.x + threadIdx.x;
@@ -387,7 +388,7 @@ __global__ void AES_CTR(char* State, char* CipherKey, const unsigned int StateLe
     // Inicialización del contador
     if (threadIdx.x == 0)
     {
-        counter = 0; // Inicialización del contador a 0, se puede ajustar según sea necesario
+        counter = counterinit; // Inicialización del contador a 0, se puede ajustar según sea necesario
     }
     __syncthreads();
 
