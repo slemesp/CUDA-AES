@@ -123,7 +123,7 @@ class AES:
             0x0b, 0x08, 0x0d, 0x0e, 0x07, 0x04, 0x01, 0x02, 0x13, 0x10, 0x15, 0x16, 0x1f, 0x1c, 0x19, 0x1a
         ], dtype=self.dtype)
 
-        self.counter = self.dtype(14111985)
+        # self.counter = self.dtype(14111985)
 
         self.entropy_kernel = self.compile_entropy_kernel()
 
@@ -244,8 +244,11 @@ class AES:
         # Pad the message so its length is a multiple of 16 bytes
         padding_len = 16 - (state.size % 16)
         if padding_len != 16:
+            logger.warning("Padding length: %d", padding_len)
             padding = np.zeros(padding_len, dtype=self.dtype)
             state = np.concatenate((state, padding))
+
+        logger.warning("Partial state: %s", state[:16])
 
         # Device memory allocation for input and output arrays
         io_state_gpu = cuda.mem_alloc_like(state)
@@ -287,6 +290,7 @@ class AES:
 
         del io_state_gpu, i_cipherkey_gpu, i_rcon_gpu, i_sbox_gpu, i_mul2_gpu, i_mul3_gpu
 
+        logger.warning("Partial res: %s", res[:16])
         # Return the result
         return res
 
@@ -296,8 +300,11 @@ class AES:
         # Pad the message so its length is a multiple of 16 bytes
         padding_len = 16 - (state.size % 16)
         if padding_len != 16:
+            logger.warning("Padding length: %d", padding_len)
             padding = np.zeros(padding_len, dtype=self.dtype)
             state = np.concatenate((state, padding))
+
+        logger.warning("Partial state: %s", state[:16])
 
         # device memory allocation
         io_state_gpu = cuda.mem_alloc_like(state)
@@ -343,16 +350,20 @@ class AES:
 
         del io_state_gpu, i_cipherkey_gpu, i_rcon_gpu, i_sbox_gpu, i_invsbox_gpu, i_mul2_gpu, i_mul3_gpu
 
+        logger.warning("Partial res: %s", res[:16])
         return res
 
-    def encrypt_ctr_gpu(self, state, cipherkey, block_size=None):
+    def encrypt_ctr_gpu(self, state, cipherkey, counterinit, block_size=None):
         state = np.frombuffer(state, dtype=self.dtype)  # Convert bytes to numpy array
 
         # Pad the message so its length is a multiple of 16 bytes
         padding_len = 16 - (state.size % 16)
         if padding_len != 16:
+            logger.warning("Padding length: %d", padding_len)
             padding = np.zeros(padding_len, dtype=self.dtype)
             state = np.concatenate((state, padding))
+
+        logger.warning("Partial state: %s", state[:16])
 
         # Device memory allocation for input and output arrays
         io_state_gpu = cuda.mem_alloc_like(state)
@@ -361,7 +372,6 @@ class AES:
         i_sbox_gpu = cuda.mem_alloc_like(self.sbox)
         i_mul2_gpu = cuda.mem_alloc_like(self.mul2)
         i_mul3_gpu = cuda.mem_alloc_like(self.mul3)
-        # i_counter_gpu = cuda.mem_alloc_like(self.counter)
 
         # Copy data from host to device
         cuda.memcpy_htod(io_state_gpu, state)
@@ -370,7 +380,6 @@ class AES:
         cuda.memcpy_htod(i_sbox_gpu, self.sbox)
         cuda.memcpy_htod(i_mul2_gpu, self.mul2)
         cuda.memcpy_htod(i_mul3_gpu, self.mul3)
-        # cuda.memcpy_htod(i_counter_gpu, self.counter)
 
         # Calculate block size and grid size
         if block_size is None:
@@ -388,7 +397,7 @@ class AES:
         # call kernel
         prg = self.module_encrypt.get_function("AES_CTR")
         prg(io_state_gpu, i_cipherkey_gpu, np.uint32(state.size), i_rcon_gpu, i_sbox_gpu, i_mul2_gpu, i_mul3_gpu,
-            self.counter,
+            np.uint32(counterinit),
             block=blockDim, grid=gridDim)
 
         # copy results from device to host
@@ -397,6 +406,7 @@ class AES:
 
         del io_state_gpu, i_cipherkey_gpu, i_rcon_gpu, i_sbox_gpu, i_mul2_gpu, i_mul3_gpu
 
+        logger.warning("Partial res: %s", res[:16])
         # Return the result
         return res
 
@@ -411,6 +421,7 @@ class AESStats():
         self.fits_file = fits_file
         self.fits_data = None
         self.fits_header = None
+        self.counter = 14111985
 
     def set_log_level(self, level):
         self.logger.setLevel(level)
@@ -466,12 +477,12 @@ class AESStats():
         data_bytes = self.data_to_bytes()
         key_array = np.frombuffer(self.key, dtype=np.byte)
         start_time_encryption = time.time()
-        encrypt_bytes = aes.encrypt_ctr_gpu(data_bytes, key_array)
+        encrypt_bytes = aes.encrypt_ctr_gpu(data_bytes, key_array, self.counter)
         encrypted_data = self.frombuffer_data(encrypt_bytes)
         logger.info("Encryption complete in %.2f seconds", time.time() - start_time_encryption)
 
         start_time_decryption = time.time()
-        decrypt_bytes = aes.encrypt_ctr_gpu(encrypt_bytes, key_array)
+        decrypt_bytes = aes.encrypt_ctr_gpu(encrypt_bytes, key_array, self.counter)
         decrypted_data = self.frombuffer_data(decrypt_bytes)
         logger.info("Decryption complete in %.2f seconds", time.time() - start_time_decryption)
 
@@ -505,24 +516,15 @@ class AESStats():
         header_bytes = self.header_to_bytes()
         key_array = np.frombuffer(self.key, dtype=np.byte)
         start_time_encryption = time.time()
-        encrypt_bytes = aes.encrypt_ctr_gpu(header_bytes, key_array)
+        encrypt_bytes = aes.encrypt_ctr_gpu(header_bytes, key_array, self.counter)
         encrypt_bytes_hex = bytes(encrypt_bytes).hex()
         logger.info("Encryption complete in %.2f seconds", time.time() - start_time_encryption)
 
         start_time_decryption = time.time()
-        decrypt_bytes = aes.encrypt_ctr_gpu(encrypt_bytes, key_array)
-        logger.info("Partial decrypted header: %s", decrypt_bytes[:10])
+        decrypt_bytes = aes.encrypt_ctr_gpu(encrypt_bytes, key_array, self.counter)
         decrypt_bytes = "".join([chr(item) for item in decrypt_bytes])
-        logger.info("Partial decrypted header: %s", decrypt_bytes[:10])
-        logger.info("Padding? %s", str(len(self.get_header())-len(decrypt_bytes)))
         decrypt_bytes = decrypt_bytes[:len(self.get_header())]
-        logger.info("Partial decrypted header: %s", decrypt_bytes[:10])
         logger.info("Decryption complete in %.2f seconds", time.time() - start_time_decryption)
-
-        logger.info("Partial encrypted header: %s", encrypt_bytes_hex[:10])
-        logger.info("Partial encrypted header: %s", encrypt_bytes[:10])
-        logger.info("Partial decrypted header: %s", decrypt_bytes[:10])
-
 
         logger.info("Total time: %.2f seconds", time.time() - start_time)
         return encrypt_bytes_hex, decrypt_bytes
@@ -540,7 +542,8 @@ class AESStats():
                 logger.error("#######    Decrypted data is close to the encrypted data")
             else:
                 if self.get_data().all() != decrypted_data.all():
-                    logger.error("#######    Decrypted data is different to the original data, Shapes: %s, %s",decrypted_data.shape, self.get_data().shape)
+                    logger.error("#######    Decrypted data is different to the original data, Shapes: %s, %s",
+                                 decrypted_data.shape, self.get_data().shape)
                 else:
                     pass
                     # logger.info("Decrypted data is different from the original data")

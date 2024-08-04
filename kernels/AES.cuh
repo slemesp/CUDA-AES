@@ -297,9 +297,89 @@ __global__ void AES_private_sharedlut(char* State, char* CipherKey, const unsign
         for (int i = 0; i < 16; i++)
             State[index + i] = stateLocal[i];
 }
-__global__ void AES_private_sharedlut_ctr(char* State, char* CipherKey, const unsigned int StateLength, char* grcon, char* gsbox, char* gmul2, char* gmul3, unsigned long long int* counter)
+//
+// __global__ void AES_private_sharedlut_ctr(char* State, char* CipherKey, const unsigned int StateLength, char* grcon, char* gsbox, char* gmul2, char* gmul3, unsigned long long int* counter)
+// {
+//     int index = (threadIdx.x + blockDim.x * blockIdx.x) * 16; // * 16 porque cada hilo procesa un bloque completo de 16 bytes
+//
+//     // Cargar las tablas de búsqueda en memoria compartida
+//     __shared__ char rcon[256];
+//     __shared__ char sbox[256];
+//     __shared__ char mul2[256];
+//     __shared__ char mul3[256];
+//
+//     if (blockDim.x < 256) {
+//         if (threadIdx.x == 0) {
+//             for (int i = 0; i < 256; i++) {
+//                 rcon[i] = grcon[i];
+//                 sbox[i] = gsbox[i];
+//                 mul2[i] = gmul2[i];
+//                 mul3[i] = gmul3[i];
+//             }
+//         }
+//     } else {
+//         if (threadIdx.x < 256) {
+//             rcon[threadIdx.x] = grcon[threadIdx.x];
+//             sbox[threadIdx.x] = gsbox[threadIdx.x];
+//             mul2[threadIdx.x] = gmul2[threadIdx.x];
+//             mul3[threadIdx.x] = gmul3[threadIdx.x];
+//         }
+//     }
+//     __syncthreads();
+//
+//     // Solo un hilo del bloque calcula la clave expandida
+//     __shared__ char ExpandedKey[16 * (NR_ROUNDS + 1)];
+//     if (threadIdx.x == 0)
+//         KeyExpansion(CipherKey, ExpandedKey, rcon, sbox);
+//
+//     // Cargar el estado en memoria privada
+//     char stateLocal[16];
+//     if (index + 16 <= StateLength) {
+//         for (int i = 0; i < 16; i++) {
+//             stateLocal[i] = State[index + i];
+//         }
+//     }
+//
+//     // Sincronizar los hilos
+//     __syncthreads();
+//
+//     // Cada hilo maneja 16 bytes (un bloque) del estado
+//     if (index + 16 <= StateLength) {
+//         // Preparar el contador para el cifrado
+//         char counterBlock[16];
+//         for (int i = 0; i < 8; i++) {
+//             counterBlock[i] = (counter[0] >> (8 * (7 - i))) & 0xFF; // Cargar los 8 bytes altos del contador
+//         }
+//         for (int i = 8; i < 16; i++) {
+//             counterBlock[i] = 0; // Los 8 bytes bajos se establecen en 0
+//         }
+//
+//         // Cifrar el bloque del contador
+//         char encryptedCounter[16];
+//         AddRoundKey(counterBlock, ExpandedKey); // Añadir la clave de ronda inicial
+//         for (int i = 1; i < NR_ROUNDS; i++)
+//             Round(counterBlock, ExpandedKey + 16 * i, sbox, mul2, mul3);
+//         FinalRound(counterBlock, ExpandedKey + 16 * NR_ROUNDS, sbox);
+//
+//         // Realizar XOR entre el estado y el contador cifrado
+//         for (int i = 0; i < 16; i++) {
+//             stateLocal[i] ^= counterBlock[i];
+//         }
+//
+//         // Incrementar el contador
+//         atomicAdd(counter, 1);
+//     }
+//
+//     __syncthreads();
+//
+//     // Escribir los resultados de vuelta al estado
+//     if (index + 16 <= StateLength)
+//         for (int i = 0; i < 16; i++)
+//             State[index + i] = stateLocal[i];
+// }
+__global__ void AES_CTR(char* State, char* CipherKey, const unsigned int StateLength, char* grcon, char* gsbox, char* gmul2, char* gmul3, unsigned int counterinit)
 {
-    int index = (threadIdx.x + blockDim.x * blockIdx.x) * 16; // * 16 porque cada hilo procesa un bloque completo de 16 bytes
+    int index = (threadIdx.x + blockDim.x * blockIdx.x) * 16; // Cada hilo procesa un bloque completo (16 bytes)
 
     // Cargar las tablas de búsqueda en memoria compartida
     __shared__ char rcon[256];
@@ -326,58 +406,50 @@ __global__ void AES_private_sharedlut_ctr(char* State, char* CipherKey, const un
     }
     __syncthreads();
 
-    // Solo un hilo del bloque calcula la clave expandida
+    // Solo un hilo del bloque de hilos debe calcular el ExpandedKey
     __shared__ char ExpandedKey[16 * (NR_ROUNDS + 1)];
     if (threadIdx.x == 0)
         KeyExpansion(CipherKey, ExpandedKey, rcon, sbox);
 
-    // Cargar el estado en memoria privada
+    // Sincronización de hilos después de la expansión de la clave
+    __syncthreads();
+
+    // Cargar el estado local y el contador
     char stateLocal[16];
+    char counter[16];
+
     if (index + 16 <= StateLength) {
         for (int i = 0; i < 16; i++) {
             stateLocal[i] = State[index + i];
+            counter[i] = 0;
         }
+        // Inicializar la parte baja del contador
+        unsigned int* counterPtr = (unsigned int*)counter;
+        counterPtr[0] = counterinit;
+        counterPtr[1] = index / 16;
     }
 
-    // Sincronizar los hilos
-    __syncthreads();
-
-    // Cada hilo maneja 16 bytes (un bloque) del estado
+    // Cifrar el contador usando AES-ECB
     if (index + 16 <= StateLength) {
-        // Preparar el contador para el cifrado
-        char counterBlock[16];
-        for (int i = 0; i < 8; i++) {
-            counterBlock[i] = (counter[0] >> (8 * (7 - i))) & 0xFF; // Cargar los 8 bytes altos del contador
-        }
-        for (int i = 8; i < 16; i++) {
-            counterBlock[i] = 0; // Los 8 bytes bajos se establecen en 0
-        }
-
-        // Cifrar el bloque del contador
-        char encryptedCounter[16];
-        AddRoundKey(counterBlock, ExpandedKey); // Añadir la clave de ronda inicial
+        AddRoundKey(counter, ExpandedKey);
         for (int i = 1; i < NR_ROUNDS; i++)
-            Round(counterBlock, ExpandedKey + 16 * i, sbox, mul2, mul3);
-        FinalRound(counterBlock, ExpandedKey + 16 * NR_ROUNDS, sbox);
-
-        // Realizar XOR entre el estado y el contador cifrado
-        for (int i = 0; i < 16; i++) {
-            stateLocal[i] ^= counterBlock[i];
-        }
-
-        // Incrementar el contador
-        atomicAdd(counter, 1);
+            Round(counter, ExpandedKey + 16 * i, sbox, mul2, mul3);
+        FinalRound(counter, ExpandedKey + 16 * NR_ROUNDS, sbox);
     }
 
     __syncthreads();
 
-    // Escribir los resultados de vuelta al estado
-    if (index + 16 <= StateLength)
-        for (int i = 0; i < 16; i++)
-            State[index + i] = stateLocal[i];
+    // Realizar XOR entre el contador cifrado y el texto plano para obtener el texto cifrado
+    if (index + 16 <= StateLength) {
+        for (int i = 0; i < 16; i++) {
+            State[index + i] = stateLocal[i] ^ counter[i];
+        }
+    }
 }
 
-__global__ void AES_CTR(char* State, char* CipherKey, const unsigned int StateLength, char* grcon, char* gsbox, char* gmul2, char* gmul3, const unsigned int counterinit)
+
+
+__global__ void AES_CTR_back(char* State, char* CipherKey, const unsigned int StateLength, char* grcon, char* gsbox, char* gmul2, char* gmul3, const unsigned int counterinit)
 {
     int index = (threadIdx.x + blockDim.x * blockIdx.x) * 16; // Cada thread procesa un bloque de 16 bytes
     int blockIndex = blockIdx.x * blockDim.x + threadIdx.x;
@@ -482,6 +554,69 @@ __global__ void AES_CTR(char* State, char* CipherKey, const unsigned int StateLe
     __syncthreads();
 }
 
+__global__ void AES_CTR_2(char* State, char* CipherKey, const unsigned int StateLength, char* grcon, char* gsbox, char* gmul2, char* gmul3)
+{
+    int index = (threadIdx.x + blockDim.x * blockIdx.x) * 16; // * 16 because every thread processes an entire block
+
+    // Load the lookup tables into shared memory
+    __shared__ char rcon[256];
+    __shared__ char sbox[256];
+    __shared__ char mul2[256];
+    __shared__ char mul3[256];
+
+    if (blockDim.x < 256) {
+        if (threadIdx.x == 0) {
+            for (int i = 0; i < 256; i++) {
+                rcon[i] = grcon[i];
+                sbox[i] = gsbox[i];
+                mul2[i] = gmul2[i];
+                mul3[i] = gmul3[i];
+            }
+        }
+    } else {
+        if (threadIdx.x < 256) {
+            rcon[threadIdx.x] = grcon[threadIdx.x];
+            sbox[threadIdx.x] = gsbox[threadIdx.x];
+            mul2[threadIdx.x] = gmul2[threadIdx.x];
+            mul3[threadIdx.x] = gmul3[threadIdx.x];
+        }
+    }
+    __syncthreads();
+
+
+    // Only a single thread from the thread block must calculate the ExpanedKey
+    __shared__ char ExpandedKey[16 * (NR_ROUNDS + 1)];
+    if (threadIdx.x == 0)
+        KeyExpansion(CipherKey, ExpandedKey, rcon, sbox);
+
+    // Load State into private memory (a state is only used by a single thread)
+    char stateLocal[16];
+    if(index + 16 <= StateLength){
+        for(int i = 0; i < 16; i++){
+            stateLocal[i] = State[index + i];
+        }
+    }
+
+    // Synchronize the threads because thread 0 wrote to shared memory, and
+    // the ExpanedKey will be accessed by each thread in the block.
+    __syncthreads();
+
+    // Each thread handles 16 bytes (a single block) of the State
+    if (index + 16 <= StateLength)
+    {
+        AddRoundKey(stateLocal, ExpandedKey);
+        for (int i = 1; i < NR_ROUNDS; i++)
+            Round(stateLocal, ExpandedKey + 16 * i, sbox, mul2, mul3);
+        FinalRound(stateLocal, ExpandedKey + 16 * NR_ROUNDS, sbox);
+    }
+
+    __syncthreads();
+
+    // Write back the results to State
+    if (index + 16 <= StateLength)
+        for (int i = 0; i < 16; i++)
+            State[index + i] = stateLocal[i];
+}
 
 
 #endif
