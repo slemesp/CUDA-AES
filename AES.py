@@ -8,8 +8,10 @@ import numpy as np
 import pycuda.driver as cuda
 from pycuda import autoinit
 from pycuda.compiler import SourceModule
+import logging
+import time
 
-from utils.plot import plot_interactive_image
+logger = logging.getLogger(__name__)
 
 
 # from utils.KeyManager import KeyManager
@@ -248,7 +250,7 @@ class AES:
             padding = np.zeros(padding_len, dtype=self.dtype)
             state = np.concatenate((state, padding))
 
-        logger.warning("Partial state: %s", state[:16])
+        # logger.warning("Partial state: %s", state[:16])
 
         # Device memory allocation for input and output arrays
         io_state_gpu = cuda.mem_alloc_like(state)
@@ -279,6 +281,9 @@ class AES:
         blockDim = (block_size, 1, 1)
         gridDim = (grid_size, 1, 1)
 
+        logger.info("Block size: %d, Grid size: %d", block_size, grid_size)
+        logger.info("State size: %d", state.size)
+
         # call kernel
         prg = self.module_encrypt.get_function("AES_private_sharedlut")
         prg(io_state_gpu, i_cipherkey_gpu, np.uint32(state.size), i_rcon_gpu, i_sbox_gpu, i_mul2_gpu, i_mul3_gpu,
@@ -290,7 +295,7 @@ class AES:
 
         del io_state_gpu, i_cipherkey_gpu, i_rcon_gpu, i_sbox_gpu, i_mul2_gpu, i_mul3_gpu
 
-        logger.warning("Partial res: %s", res[:16])
+        # logger.warning("Partial res: %s", res[:16])
         # Return the result
         return res
 
@@ -304,7 +309,7 @@ class AES:
             padding = np.zeros(padding_len, dtype=self.dtype)
             state = np.concatenate((state, padding))
 
-        logger.warning("Partial state: %s", state[:16])
+        # logger.warning("Partial state: %s", state[:16])
 
         # device memory allocation
         io_state_gpu = cuda.mem_alloc_like(state)
@@ -336,6 +341,9 @@ class AES:
         blockDim = (block_size, 1, 1)
         gridDim = (grid_size, 1, 1)
 
+        logger.info("Block size: %d, Grid size: %d", block_size, grid_size)
+        logger.info("State size: %d", state.size)
+
         # call kernel
         prg = self.module_decrpyt.get_function("inv_AES")
         prg(io_state_gpu, i_cipherkey_gpu, np.uint32(state.size), i_rcon_gpu, i_sbox_gpu, i_invsbox_gpu,
@@ -350,7 +358,7 @@ class AES:
 
         del io_state_gpu, i_cipherkey_gpu, i_rcon_gpu, i_sbox_gpu, i_invsbox_gpu, i_mul2_gpu, i_mul3_gpu
 
-        logger.warning("Partial res: %s", res[:16])
+        # logger.warning("Partial res: %s", res[:16])
         return res
 
     def encrypt_ctr_gpu(self, state, cipherkey, counterinit, block_size=None):
@@ -363,7 +371,7 @@ class AES:
             padding = np.zeros(padding_len, dtype=self.dtype)
             state = np.concatenate((state, padding))
 
-        logger.warning("Partial state: %s", state[:16])
+        # logger.warning("Partial state: %s", state[:16])
 
         # Device memory allocation for input and output arrays
         io_state_gpu = cuda.mem_alloc_like(state)
@@ -394,10 +402,18 @@ class AES:
         blockDim = (block_size, 1, 1)
         gridDim = (grid_size, 1, 1)
 
+        logger.info("Block size: %d, Grid size: %d", block_size, grid_size)
+        logger.info("State size: %d", state.size)
+
+        safe_dtype = self.__get_safe_data_type(counterinit + state.size)
+
+        if safe_dtype is None:
+            raise ValueError("No suitable data type found for counterinit")
+
         # call kernel
         prg = self.module_encrypt.get_function("AES_CTR")
         prg(io_state_gpu, i_cipherkey_gpu, np.uint32(state.size), i_rcon_gpu, i_sbox_gpu, i_mul2_gpu, i_mul3_gpu,
-            np.uint32(counterinit),
+            safe_dtype(counterinit),
             block=blockDim, grid=gridDim)
 
         # copy results from device to host
@@ -406,431 +422,30 @@ class AES:
 
         del io_state_gpu, i_cipherkey_gpu, i_rcon_gpu, i_sbox_gpu, i_mul2_gpu, i_mul3_gpu
 
-        logger.warning("Partial res: %s", res[:16])
+        # logger.warning("Partial res: %s", res[:16])
         # Return the result
         return res
 
+    def __get_safe_data_type(self, value):
+        """
+        Finds the largest safe data type for a given value from a dictionary mapping types to maximum values.
 
-class AESStats():
-    def __init__(self, fits_file, key):
+        Args:
+            value: The value to check for type suitability.
+            data_type_map: A dictionary mapping data types (e.g., np.uint8) to their corresponding maximum representable values.
 
-        self.logger = logging.getLogger(__name__)
-        self.logger.setLevel(logging.INFO)
-        self.logger.info("************ AES %s ************", fits_file)
-        self.key = key
-        self.fits_file = fits_file
-        self.fits_data = None
-        self.fits_header = None
-        self.counter = 14111985
+        Returns:
+            The most suitable data type for the value, or None if no suitable type is found.
+        """
+        type_map = {
+            np.uint8: np.iinfo(np.uint8).max,
+            np.uint16: np.iinfo(np.uint16).max,
+            np.uint32: np.iinfo(np.uint32).max,
+            np.uint64: np.iinfo(np.uint64).max,
+        }
 
-    def set_log_level(self, level):
-        self.logger.setLevel(level)
+        for dtype, max_value in type_map.items():
+            if value <= max_value:
+                return dtype
+        return None
 
-    def get_data(self):
-        if self.fits_data is None:
-            start_time = time.time()
-            self.fits_data = fits.getdata(self.fits_file)
-            logger.info("Data loaded in %.2f seconds", time.time() - start_time)
-            logger.info("Data shape: %s", self.fits_data.shape)
-        return self.fits_data
-
-    def get_header(self):
-        if self.fits_header is None:
-            self.fits_header = fits.getheader(self.fits_file).tostring()
-        return self.fits_header
-
-    def data_to_bytes(self):
-        return self.get_data().tobytes()
-
-    def header_to_bytes(self):
-        return self.get_header().encode('utf-8')
-
-    def frombuffer_data(self, data_bytes):
-        return np.frombuffer(data_bytes, dtype=self.get_data().dtype).reshape(self.get_data().shape)
-
-    def frombuffer_header(self, header_bytes):
-        return np.frombuffer(header_bytes, dtype=np.byte)
-
-    def compute_aes_ebs_data(self):
-        self.logger.info("*** AES EBC ***")
-        aes = AES()
-        start_time = time.time()
-        data_bytes = self.data_to_bytes()
-        key_array = np.frombuffer(self.key, dtype=np.byte)
-        start_time_encryption = time.time()
-        encrypt_bytes = aes.encrypt_gpu(data_bytes, key_array)
-        encrypted_data = self.frombuffer_data(encrypt_bytes)
-        logger.info("Encryption complete in %.2f seconds", time.time() - start_time_encryption)
-
-        start_time_decryption = time.time()
-        decrypt_bytes = aes.decrypt_gpu(encrypt_bytes, key_array)
-        decrypted_data = self.frombuffer_data(decrypt_bytes)
-        logger.info("Decryption complete in %.2f seconds", time.time() - start_time_decryption)
-
-        logger.info("Total time: %.2f seconds", time.time() - start_time)
-        return encrypted_data, decrypted_data
-
-    def compute_aes_ctr_data(self):
-        self.logger.info("*** AES CTR ***")
-        aes = AES()
-        start_time = time.time()
-        data_bytes = self.data_to_bytes()
-        key_array = np.frombuffer(self.key, dtype=np.byte)
-        start_time_encryption = time.time()
-        encrypt_bytes = aes.encrypt_ctr_gpu(data_bytes, key_array, self.counter)
-        encrypted_data = self.frombuffer_data(encrypt_bytes)
-        logger.info("Encryption complete in %.2f seconds", time.time() - start_time_encryption)
-
-        start_time_decryption = time.time()
-        decrypt_bytes = aes.encrypt_ctr_gpu(encrypt_bytes, key_array, self.counter)
-        decrypted_data = self.frombuffer_data(decrypt_bytes)
-        logger.info("Decryption complete in %.2f seconds", time.time() - start_time_decryption)
-
-        logger.info("Total time: %.2f seconds", time.time() - start_time)
-        return encrypted_data, decrypted_data
-
-    def compute_aes_ebs_header(self):
-        self.logger.info("*** AES EBC ***")
-        aes = AES()
-        start_time = time.time()
-        header_bytes = self.header_to_bytes()
-        key_array = np.frombuffer(self.key, dtype=np.byte)
-        start_time_encryption = time.time()
-        encrypt_bytes = aes.encrypt_gpu(header_bytes, key_array)
-        encrypt_bytes_hex = bytes(encrypt_bytes).hex()
-        logger.info("Encryption complete in %.2f seconds", time.time() - start_time_encryption)
-
-        start_time_decryption = time.time()
-        decrypt_bytes = aes.decrypt_gpu(encrypt_bytes, key_array)
-        decrypt_bytes = "".join([chr(item) for item in decrypt_bytes])
-        decrypt_bytes = decrypt_bytes[:len(self.get_header())]
-        logger.info("Decryption complete in %.2f seconds", time.time() - start_time_decryption)
-
-        logger.info("Total time: %.2f seconds", time.time() - start_time)
-        return encrypt_bytes_hex, decrypt_bytes
-
-    def compute_aes_ctr_header(self):
-        self.logger.info("*** AES CTR ***")
-        aes = AES()
-        start_time = time.time()
-        header_bytes = self.header_to_bytes()
-        key_array = np.frombuffer(self.key, dtype=np.byte)
-        start_time_encryption = time.time()
-        encrypt_bytes = aes.encrypt_ctr_gpu(header_bytes, key_array, self.counter)
-        encrypt_bytes_hex = bytes(encrypt_bytes).hex()
-        logger.info("Encryption complete in %.2f seconds", time.time() - start_time_encryption)
-
-        start_time_decryption = time.time()
-        decrypt_bytes = aes.encrypt_ctr_gpu(encrypt_bytes, key_array, self.counter)
-        decrypt_bytes = "".join([chr(item) for item in decrypt_bytes])
-        decrypt_bytes = decrypt_bytes[:len(self.get_header())]
-        logger.info("Decryption complete in %.2f seconds", time.time() - start_time_decryption)
-
-        logger.info("Total time: %.2f seconds", time.time() - start_time)
-        return encrypt_bytes_hex, decrypt_bytes
-
-    def analyze_entropy(self, data):
-        aes = AES()
-        entropy = aes.calculate_entropy(data)
-        logger.info("Entropy: %s", entropy)
-
-    def check_results_data(self, decrypted_data, encrypted_data):
-        if np.array_equal(decrypted_data, encrypted_data):
-            logger.error("#######    Decrypted data is equal to the encrypted data")
-        else:
-            if np.allclose(decrypted_data, encrypted_data):
-                logger.error("#######    Decrypted data is close to the encrypted data")
-            else:
-                if self.get_data().all() != decrypted_data.all():
-                    logger.error("#######    Decrypted data is different to the original data, Shapes: %s, %s",
-                                 decrypted_data.shape, self.get_data().shape)
-                else:
-                    pass
-                    # logger.info("Decrypted data is different from the original data")
-
-    def analyze_results_data(self, encrypted_data, decrypted_data):
-        self.check_results_data(decrypted_data, encrypted_data)
-        self.analyze_entropy(encrypted_data)
-        self.analyze_entropy(decrypted_data)
-
-    def analyze_aes(self):
-        logger.info(" AES Data Analysis")
-        encrypted_data_ebs, decrypted_data_ebs = self.compute_aes_ebs_data()
-        self.analyze_results_data(encrypted_data_ebs, decrypted_data_ebs)
-        encrypted_data_ctr, decrypted_data_ctr = self.compute_aes_ctr_data()
-        self.analyze_results_data(encrypted_data_ctr, decrypted_data_ctr)
-
-        logger.info(" AES Header Analysis")
-        encrypted_header_ebs, decrypted_header_ebs = self.compute_aes_ebs_header()
-        self.analyze_results_header(encrypted_header_ebs, decrypted_header_ebs)
-        encrypted_header_ctr, decrypted_header_ctr = self.compute_aes_ctr_header()
-        self.analyze_results_header(encrypted_header_ctr, decrypted_header_ctr)
-
-        logger.info("************ END %s ************", self.fits_file)
-
-    def analyze_results_header(self, encrypted_header_ebs, decrypted_header_ebs):
-        self.check_results_header(decrypted_header_ebs, encrypted_header_ebs)
-
-    def check_results_header(self, decrypted_header_ebs, encrypted_header_ebs):
-
-        # Comparación de arrays usando numpy.array_equal
-        if np.array_equal(decrypted_header_ebs, encrypted_header_ebs):
-            logger.error("#######    Decrypted header is equal to the encrypted header")
-        else:
-            if not np.array_equal(self.get_header(), decrypted_header_ebs):
-                logger.error("#######    Decrypted header is different to the original header")
-
-                # Comparar las longitudes
-                if len(decrypted_header_ebs) != len(self.get_header()):
-                    logger.error(
-                        f"Longitud diferente: decrypted_header_ebs({len(decrypted_header_ebs)}) != original_header({len(self.get_header())})")
-                else:
-                    # Identificar y reportar las diferencias en contenido
-                    diferencias = np.where(decrypted_header_ebs != self.get_header())
-                    logger.error(f"Diferencias en índices: {diferencias[0]}")
-                    for idx in diferencias[0]:
-                        logger.error(
-                            f"Diferencia en índice {idx}: decrypted_header_ebs={decrypted_header_ebs[idx]}, original_header={self.get_header()[idx]}")
-            else:
-                pass
-                # logger.info("Decrypted header is different from the original header")
-
-
-#
-# def main_aes_ctr(fits_file):
-#     logger.info("************ AES CTR ************")
-#     logger.info("Loading FITS file: %s", fits_file)
-#
-#     # Medir tiempo de carga de datos
-#     start_time = time.time()
-#     try:
-#         image_data = fits.getdata(fits_file)
-#         load_data_time = time.time() - start_time
-#         logger.info("Data loaded in %.2f seconds", load_data_time)
-#     except Exception as e:
-#         logger.error("Error loading FITS file: %s", e)
-#         raise
-#
-#     # Medir tiempo de conversión a bytes
-#     start_time = time.time()
-#     try:
-#         image_bytes = image_data.tobytes()
-#         tobytes_time = time.time() - start_time
-#         logger.info("Conversion to bytes completed in %.2f seconds", tobytes_time)
-#     except Exception as e:
-#         logger.error("Error converting image data to bytes: %s", e)
-#         raise
-#
-#     # Generar clave aleatoria
-#     byte_key = os.urandom(128)
-#
-#     # # Inicializar el gestor de claves
-#     # master_key = b'pruebaKeyMaster'  # Asegúrate de que esto sea una clave segura en producción
-#     # key_manager = FileEncryptor(master_key)
-#     #
-#     # # Generar clave de usuario
-#     # user_id = b'user123'  # Este podría ser un identificador único para cada usuario
-#     # byte_array_key_user = key_manager.get_user_key(user_id)
-#     # # byte_array_key_master = key_manager.get_master_key()
-#
-#     byte_array_key = np.frombuffer(byte_key, dtype=np.byte)
-#
-#     # Crear instancia de AES
-#     computer = AES()
-#
-#     # Encriptar los datos de la imagen
-#     logger.info("Encrypting the input...")
-#     start_time = time.time()
-#     encrypted_bytes = computer.encrypt_ctr_gpu(image_bytes, byte_array_key)
-#     encryption_time = time.time() - start_time
-#     logger.info("Encryption complete in %.2f seconds", encryption_time)
-#
-#     # Convertir los bytes encriptados a un array de numpy
-#     encrypted_data = np.frombuffer(encrypted_bytes, dtype=image_data.dtype).reshape(image_data.shape)
-#
-#     # Desencriptar los datos de la imagen
-#     logger.info("Decrypting the input...")
-#     start_time = time.time()
-#     decrypted_bytes = computer.encrypt_ctr_gpu(encrypted_bytes, byte_array_key)
-#     decryption_time = time.time() - start_time
-#     logger.info("Decryption complete in %.2f seconds", decryption_time)
-#
-#     # # Desencriptar los datos de la imagen
-#     # logger.info("Decrypting the input...")
-#     # start_time = time.time()
-#     # decrypted_bytes_master = computer.encrypt_ctr_gpu(encrypted_bytes, byte_array_key_master)
-#     # decryption_time = time.time() - start_time
-#     # logger.info("Decryption complete in %.2f seconds", decryption_time)
-#
-#     # Convertir los bytes desencriptados a un array de numpy
-#     decrypted_data = np.frombuffer(decrypted_bytes, dtype=image_data.dtype).reshape(image_data.shape)
-#     # decrypted_data_master = np.frombuffer(decrypted_bytes_master, dtype=image_data.dtype).reshape(image_data.shape)
-#
-#     check_results(decrypted_data, encrypted_data, image_data)
-#     # check_results(decrypted_data_master, encrypted_data, image_data)
-#
-#     result_entropy = computer.calculate_entropy(encrypted_data)
-#     logger.info("Entropy: %s", result_entropy)
-#
-#
-# def main_aes(fits_file):
-#     logger.info("************ AES ************")
-#     logger.info("Loading FITS file: %s", fits_file)
-#
-#     # Medir tiempo de carga de datos
-#     start_time = time.time()
-#     try:
-#         image_data = fits.getdata(fits_file)
-#         load_data_time = time.time() - start_time
-#         logger.info("Data loaded in %.2f seconds", load_data_time)
-#     except Exception as e:
-#         logger.error("Error loading FITS file: %s", e)
-#         raise
-#
-#     # Medir tiempo de conversión a bytes
-#     start_time = time.time()
-#     try:
-#         image_bytes = image_data.tobytes()
-#         tobytes_time = time.time() - start_time
-#         logger.info("Conversion to bytes completed in %.2f seconds", tobytes_time)
-#     except Exception as e:
-#         logger.error("Error converting image data to bytes: %s", e)
-#         raise
-#
-#     # Generar clave aleatoria
-#     byte_key = os.urandom(128)
-#     byte_array_key = np.frombuffer(byte_key, dtype=np.byte)
-#
-#     # Crear instancia de AES
-#     computer = AES()
-#
-#     # Encriptar los datos de la imagen
-#     logger.info("Encrypting the input...")
-#     start_time = time.time()
-#     encrypted_bytes = computer.encrypt_gpu(image_bytes, byte_array_key)
-#     encryption_time = time.time() - start_time
-#     logger.info("Encryption complete in %.2f seconds", encryption_time)
-#
-#     # Convertir los bytes encriptados a un array de numpy
-#     encrypted_data = np.frombuffer(encrypted_bytes, dtype=image_data.dtype).reshape(image_data.shape)
-#
-#     # Desencriptar los datos de la imagen
-#     logger.info("Decrypting the input...")
-#     start_time = time.time()
-#     decrypted_bytes = computer.decrypt_gpu(encrypted_bytes, byte_array_key)
-#     decryption_time = time.time() - start_time
-#     logger.info("Decryption complete in %.2f seconds", decryption_time)
-#
-#     # Convertir los bytes desencriptados a un array de numpy
-#     decrypted_data = np.frombuffer(decrypted_bytes, dtype=image_data.dtype).reshape(image_data.shape)
-#
-#     check_results(decrypted_data, encrypted_data, image_data)
-#
-#     result_entropy = computer.calculate_entropy(encrypted_data)
-#     logger.info("Entropy: %s", result_entropy)
-#     # plot_interactive_image(image_data, encrypted_data, decrypted_data)
-
-
-def check_results(decrypted_data, encrypted_data, image_data):
-    import numpy as np
-    # plot_interactive_image(image_data, encrypted_data, decrypted_data, crop_size=50)
-    # Verificar si la imagen original es igual a la desencriptada
-    data_is_equal_ori_de = np.array_equal(image_data, decrypted_data)
-    data_is_equal_ori_en = np.array_equal(image_data, encrypted_data)
-    data_is_equal_en_de = np.array_equal(encrypted_data, decrypted_data)
-
-    if not data_is_equal_ori_de:
-        logger.info("********** Image data is equal to decrypted data: %s", data_is_equal_ori_de)
-
-    if data_is_equal_ori_en:
-        logger.info("********** Image data is equal to encrypted data: %s", data_is_equal_ori_en)
-
-    if data_is_equal_en_de:
-        logger.info("********** Encrypted data is equal to decrypted data: %s", data_is_equal_en_de)
-
-    if data_is_equal_ori_de and not data_is_equal_en_de and not data_is_equal_ori_en:
-        logger.info("Encrypted data is not equal to decrypted data")
-
-    plot_interactive_image(image_data, encrypted_data, decrypted_data)
-
-
-if __name__ == "__main__":
-    import logging
-    import time
-    from astropy.io import fits
-
-    # Configuración del logger
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-    logger = logging.getLogger(__name__)
-
-    logger.info("Autoinit device: %s", autoinit.device)
-
-    # # Archivo FITS
-    # fits_file = './Images/TTT1_iKon936-1_2024-05-12-23-55-18-657530_Ton599.fits'
-    # # fits_file = './Images/TTT2_QHY411-2_2024-05-13-03-02-54-564461_Chariklo.fits'
-    #
-    # main_aes(fits_file)
-    # main_aes_ctr(fits_file)
-    #
-
-    import time
-    import traceback
-    from astropy.io import fits
-    import os
-
-    # Root image directory
-    directory_path = os.path.join(os.path.dirname(__file__), 'Images')
-    directory_path = os.path.join('/home/slemes/PycharmProjects/GPUPhotFinal/tests/data')
-
-    # Get all subdirectories and find if exists a FITS file
-    for root, dirs, files in os.walk(directory_path):
-        for file in files:
-            if file.endswith('.fits'):
-                if "TTT1" in file:
-                    image_path = os.path.join(root, file)
-                    try:
-                        logger.info(f"Processing {image_path}")
-                        start_time = time.time()
-
-                        testing_key = b'pruebaKeyMaster'
-
-                        aes_stats = AESStats(image_path, testing_key)
-                        # aes_stats.set_log_level(logging.WARNING)
-                        aes_stats.analyze_aes()
-                        # ctr_encrypt, ctr_decrypt = aes_stats.compute_aes_ctr(testing_key)
-                        # ebs_encrypt, ebs_decrypt = aes_stats.compute_aes_ebs(testing_key)
-                        #
-                        # if ctr_decrypt.all() == ebs_decrypt.all() and ebs_decrypt.all() == aes_stats.get_data().all():
-                        #     logger.info("Decrypted Works Fine for file: %s", file)
-                        # elif ctr_decrypt.all() != ebs_decrypt.all():
-                        #     if ctr_decrypt.all() != aes_stats.get_data().all():
-                        #         logger.error("Decrypted data is not equal to original data for file: %s", file)
-                        #     if ebs_decrypt.all() != aes_stats.get_data().all():
-                        #         logger.error("Decrypted data is not equal to original data for file: %s", file)
-                        # else:
-                        #     logger.error("Decrypted data is not equal to original data for file: %s", file)
-
-                        end_time = time.time()
-                        logger.info(f"Elapsed time for {file}: {end_time - start_time:.2f} seconds")
-                    except Exception as e:
-                        logger.error(f"Error processing {image_path}: {e}")
-                        logger.error("Traceback:")
-                        traceback.print_exc()
-                break
-
-# clave secreta -> Datos de la imagen
-# esquema umbral 2:n (n variable?) (sistemas de ecuaciones) -> Header imagen
-"""
-Tiempos de generar en distintos tipos
-Medir entropía de la imagen
-
-
-AES
-Generación claves aes
-esquema umbral para proteger claves
-
-
-Generación de claves AES
-Esquema kem 
-Crystals KEM postcuantica  kyber
-"""
