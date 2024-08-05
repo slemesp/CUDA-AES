@@ -1,7 +1,5 @@
 import logging
-import os
 import random
-import time
 
 import numpy as np
 from astropy.io import fits
@@ -13,8 +11,6 @@ from utils.KeyManagerKEM import KeyManagerKEM
 from utils.KeyManagerSimetric import KeyManagerSimetric
 from utils.KeyManagerThreshold import KeyManagerThreshold
 from utils.KeyUser import KeyUser
-import logging
-import time
 
 # Configuración del logger
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -351,6 +347,7 @@ class AESStats():
             else:
                 pass
                 # logger.info("Decrypted header is different from the original header")
+
 
 if __name__ == "__main__":
     import logging

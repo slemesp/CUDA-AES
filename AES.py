@@ -4,14 +4,15 @@ decryption implementation, and the helper functions to easily encrypt and decryp
 using this class by running this script. 
 """
 
+import logging
+
 import numpy as np
 import pycuda.driver as cuda
 from pycuda import autoinit
 from pycuda.compiler import SourceModule
-import logging
-import time
 
 logger = logging.getLogger(__name__)
+logger.debug("Autoinit device: %s", autoinit.device)
 
 
 # from utils.KeyManager import KeyManager
@@ -448,4 +449,3 @@ class AES:
             if value <= max_value:
                 return dtype
         return None
-
