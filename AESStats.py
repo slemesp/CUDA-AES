@@ -406,4 +406,18 @@ esquema umbral para proteger claves
 Generación de claves AES
 Esquema kem 
 Crystals KEM postcuantica  kyber
+
+
+Control de acceso a directorio AES 
+
+Wifi cpa3 cifrado cbc-mac con ctr -> CCMP
+
+
+aaa
+
+
+
+Emepzar a escribir el caso de uso y con el ver como se puede ir haciendo  
+
+
 """
