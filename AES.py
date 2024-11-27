@@ -30,6 +30,7 @@ class AES:
         self.module_encrypt = None
         self.get_source_module_encrypt()
         self.get_source_module_decrypt()
+        self.get_source_module_gcmp()
 
         self.sbox = np.array([
             0x63, 0x7C, 0x77, 0x7B, 0xF2, 0x6B, 0x6F, 0xC5, 0x30, 0x01, 0x67, 0x2B, 0xFE, 0xD7, 0xAB, 0x76,
@@ -133,7 +134,7 @@ class AES:
     @staticmethod
     def __read_file(path, mode="r"):
         with open(path, mode) as f:
-            return f.read()
+            return f.read() + "\n"
 
     def compile_entropy_kernel(self):
         kernel_code = """
@@ -213,6 +214,11 @@ class AES:
         kernelwrapper += self.__read_file("kernels/FinalRound.cuh")
         kernelwrapper += self.__read_file("kernels/AES.cuh")
 
+        # print(private_sharedlut + kernelwrapper)
+        # Save kernel into kernels/final_AES.cuh
+        with open("kernels/final_AES.cuh", "w") as f:
+            f.write(private_sharedlut + kernelwrapper)
+
         self.module_encrypt = SourceModule(private_sharedlut + kernelwrapper)
 
     def get_source_module_decrypt(self):
@@ -239,7 +245,39 @@ class AES:
 
         kernelwrapper += self.__read_file("kernels/InvAES.cuh")
 
+        # print(sharedLut + kernelwrapper)
+        # Save kernel into kernels/final_AES.cuh
+        with open("kernels/final_AES_Inv.cuh", "w") as f:
+            f.write(sharedLut + kernelwrapper)
+
         self.module_decrpyt = SourceModule(sharedLut + kernelwrapper)
+
+    def get_source_module_gcmp(self):
+        """
+        Prepara el módulo fuente para GCMP.
+        """
+        private_sharedlut = """
+        #define AES_PRIVATESTATE_SHAREDLUT
+        #define LUT_IN_SHARED
+        """
+
+        kernelwrapper = self.__read_file("kernels/general.cuh")
+        kernelwrapper += self.__read_file("kernels/SubBytes.cuh")
+        kernelwrapper += self.__read_file("kernels/ShiftRows.cuh")
+        kernelwrapper += self.__read_file("kernels/MixColumns.cuh")
+        kernelwrapper += self.__read_file("kernels/AddRoundKey.cuh")
+        kernelwrapper += self.__read_file("kernels/Round.cuh")
+        kernelwrapper += self.__read_file("kernels/KeyExpansion.cuh")
+        kernelwrapper += self.__read_file("kernels/FinalRound.cuh")
+        # kernelwrapper += self.__read_file("kernels/AES.cuh")
+
+        # Agregar nuevos kernels para GCMP
+        kernelwrapper += self.__read_file("kernels/CCMP.cuh")
+
+        with open("kernels/final_AES_CCMP.cuh", "w") as f:
+            f.write(private_sharedlut + kernelwrapper)
+
+        self.module_gcmp = SourceModule(private_sharedlut + kernelwrapper)
 
     def encrypt_gpu(self, state, cipherkey, block_size=None):
         state = np.frombuffer(state, dtype=self.dtype)  # Convert bytes to numpy array

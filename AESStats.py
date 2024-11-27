@@ -139,6 +139,75 @@ class AESStats():
         logger.info("Total time: %.2f seconds", time.time() - start_time)
         return encrypt_bytes_hex, decrypt_bytes
 
+    def compute_aes_gcmp_data(self, key_encryption, key_decryption):
+        self.logger.info("*** AES GCMP ***")
+        aes = AES()
+        start_time = time.time()
+
+        # Convertir datos a bytes
+        data_bytes = self.data_to_bytes()
+        key_array = np.frombuffer(key_encryption, dtype=np.byte)
+        nonce = np.random.bytes(12)  # 96-bit nonce
+
+        # Proporcionar datos asociados (puede ser vacío o algún metadato)
+        associated_data = b"Example associated data"  # Cambia esto según sea necesario
+
+        # Comenzar cifrado
+        start_time_encryption = time.time()
+        try:
+            encrypted_data, tag = aes.gcmp_encrypt_gpu(data_bytes, key_array, nonce, associated_data)
+            logger.info("Encryption complete in %.2f seconds", time.time() - start_time_encryption)
+        except Exception as e:
+            logger.error("Error during encryption: %s", str(e))
+            raise
+
+        # Comenzar descifrado
+        start_time_decryption = time.time()
+        try:
+            decrypted_data = aes.gcmp_decrypt_gpu(encrypted_data, key_array, nonce, tag, associated_data)
+            logger.info("Decryption complete in %.2f seconds", time.time() - start_time_decryption)
+        except Exception as e:
+            logger.error("Error during decryption: %s", str(e))
+            raise
+
+        logger.info("Total time: %.2f seconds", time.time() - start_time)
+
+        return self.frombuffer_data(encrypted_data), self.frombuffer_data(decrypted_data)
+
+    def compute_aes_gcmp_header(self, key_encryption, key_decryption):
+        self.logger.info("*** AES GCMP Header ***")
+        aes = AES()
+        start_time = time.time()
+
+        # Convertir encabezados a bytes
+        header_bytes = self.header_to_bytes()
+        key_array = np.frombuffer(key_encryption, dtype=np.byte)
+        nonce = np.random.bytes(12)  # 96-bit nonce
+
+        # Comenzar cifrado del encabezado
+        start_time_encryption = time.time()
+        try:
+            encrypted_header, tag = aes.gcmp_encrypt_gpu(header_bytes, key_array, nonce)
+            encrypt_bytes_hex = bytes(encrypted_header).hex()
+            logger.info("Header encryption complete in %.2f seconds", time.time() - start_time_encryption)
+        except Exception as e:
+            logger.error("Error during header encryption: %s", str(e))
+            raise
+
+        # Comenzar descifrado del encabezado
+        start_time_decryption = time.time()
+        try:
+            decrypted_header = aes.gcmp_decrypt_gpu(encrypted_header, key_array, nonce, tag)
+            decrypt_bytes = "".join([chr(item) for item in decrypted_header])
+            decrypt_bytes = decrypt_bytes[:len(self.get_header())]  # Asegurarse de que coincida con el tamaño original
+            logger.info("Header decryption complete in %.2f seconds", time.time() - start_time_decryption)
+        except Exception as e:
+            logger.error("Error during header decryption: %s", str(e))
+            raise
+
+        logger.info("Total time: %.2f seconds", time.time() - start_time)
+
+        return encrypt_bytes_hex, decrypt_bytes
     def analyze_entropy(self, data):
         aes = AES()
         entropy = aes.calculate_entropy(data)
@@ -184,6 +253,9 @@ class AESStats():
         encrypted_data_ctr, decrypted_data_ctr = self.compute_aes_ctr_data(key_encryption=sim_key,
                                                                            key_decryption=sim_key)
         self.analyze_results_data(encrypted_data_ctr, decrypted_data_ctr)
+        encrypted_data_gcmp, decrypted_data_gcmp = self.compute_aes_gcmp_data(key_encryption=sim_key,
+                                                                           key_decryption=sim_key)
+        self.analyze_results_data(encrypted_data_gcmp, decrypted_data_gcmp)
 
         logger.info(" AES Header Analysis")
 
@@ -193,6 +265,9 @@ class AESStats():
         encrypted_header_ctr, decrypted_header_ctr = self.compute_aes_ctr_header(key_encryption=sim_key,
                                                                                  key_decryption=sim_key)
         self.analyze_results_header(encrypted_header_ctr, decrypted_header_ctr)
+        encrypted_header_gcmp, decrypted_header_gcmp = self.compute_aes_gcmp_header(key_encryption=sim_key,
+                                                                                 key_decryption=sim_key)
+        self.analyze_results_header(encrypted_header_gcmp, decrypted_header_gcmp)
 
         logger.info("***************************** AES KeyManagerAsimetric")
 
